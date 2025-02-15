@@ -4,6 +4,7 @@ from database import init_db, add_user, add_pokemon, get_collection,distribute_r
 from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_stats
 import random
 import asyncio
+import os
 
 # Remove old session files if they exist
 for session_file in ["bot_session.session", "bot_session.session-journal"]:
