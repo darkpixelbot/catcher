@@ -354,6 +354,19 @@ async def my_inventory(event):
 
     await event.reply(f"💰 **Your PokéCoins:** {pokecoins}")
 
+from flask import Flask
+import threading
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running"
+
+def run_server():
+    app.run(host="0.0.0.0", port=8000)
+
+threading.Thread(target=run_server, daemon=True).start()
 
 
 init_db()
