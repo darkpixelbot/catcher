@@ -5,11 +5,13 @@ from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_sta
 import random
 import asyncio
 import os
+import os
 
 # Remove old session files if they exist
 for session_file in ["bot_session.session", "bot_session.session-journal"]:
     if os.path.exists(session_file):
         os.remove(session_file)
+
 bot = TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 current_pokemon = None
