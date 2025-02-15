@@ -1,7 +1,9 @@
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events,Button
 from config import API_ID, API_HASH, BOT_TOKEN
-from database import init_db, add_user, add_pokemon, get_collection
+from database import init_db, add_user, add_pokemon, get_collection,distribute_rewards,get_pokecoins
 from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_stats
+import random
+import asyncio
 
 bot = TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 current_pokemon = None
@@ -82,26 +84,17 @@ async def message_handler(event):
         current_pokemon = get_random_pokemon()
         await bot.send_file(event.chat_id, current_pokemon["image"], caption="A wild Pokémon appeared! Reply with its name to catch it!")
 
-
-
 import random
 from telethon import events, Button
+from telethon.tl.functions.users import GetFullUserRequest
 
-battle_data = {}  # Dictionary to store ongoing battles
-
-from telethon import Button
-import random
-
+# Global battle data storage
 battle_data = {}
-
-import random
-from telethon import events, Button
-
-# Dictionary to track active battles
-battle_data = {}
+battle_timeouts = {}  # To handle battle timeouts
 
 @bot.on(events.NewMessage(pattern="/battle"))
 async def battle(event):
+    """Handle the /battle command to initiate a battle."""
     if not event.message.is_reply:
         await event.reply("⚠️ Please reply to a user to challenge them to a battle!")
         return
@@ -112,6 +105,11 @@ async def battle(event):
 
     if challenger_id == opponent_id:
         await event.reply("⚠️ You can't battle yourself!")
+        return
+
+    # Check if either player is already in a battle
+    if challenger_id in battle_data or opponent_id in battle_data:
+        await event.reply("⚠️ One or both players are already in a battle!")
         return
 
     challenger_pokemon = get_collection(challenger_id)
@@ -130,9 +128,28 @@ async def battle(event):
                                         f"**Challenger:** {event.sender.first_name}\n"
                                         "Do you accept?", buttons=buttons)
 
+    # Set a timeout for the battle request (e.g., 60 seconds)
+    battle_timeouts[(challenger_id, opponent_id)] = asyncio.create_task(
+        battle_timeout(challenger_id, opponent_id)
+    )
+
+async def battle_timeout(challenger_id, opponent_id):
+    """Handle battle request timeouts."""
+    await asyncio.sleep(60)  # 60 seconds timeout
+    if (challenger_id, opponent_id) in battle_timeouts:
+        await bot.send_message(challenger_id, "⚠️ Battle request timed out!")
+        await bot.send_message(opponent_id, "⚠️ Battle request timed out!")
+        del battle_timeouts[(challenger_id, opponent_id)]
+
 @bot.on(events.CallbackQuery(pattern=r"accept_(\d+)_(\d+)"))
 async def accept_battle(event):
+    """Handle battle acceptance."""
     challenger_id, opponent_id = map(int, event.data.decode().split("_")[1:])
+
+    # Cancel the timeout task
+    if (challenger_id, opponent_id) in battle_timeouts:
+        battle_timeouts[(challenger_id, opponent_id)].cancel()
+        del battle_timeouts[(challenger_id, opponent_id)]
 
     challenger_pokemon = get_collection(challenger_id)
     opponent_pokemon = get_collection(opponent_id)
@@ -142,12 +159,13 @@ async def accept_battle(event):
         await bot.send_message(opponent_id, "⚠️ Battle canceled! One or both players have no Pokémon.")
         return
 
-    # Pick 2 random Pokémon for each player
+    # Pick random Pokémon for each player (max 5)
     challenger_pokemon = random.sample(challenger_pokemon, min(5, len(challenger_pokemon)))
     opponent_pokemon = random.sample(opponent_pokemon, min(5, len(opponent_pokemon)))
 
     turn = random.choice([challenger_id, opponent_id])
 
+    # Initialize battle data
     battle_data[challenger_id] = {"opponent": opponent_id, "pokemon": challenger_pokemon, "score": 0}
     battle_data[opponent_id] = {"opponent": challenger_id, "pokemon": opponent_pokemon, "score": 0}
 
@@ -161,27 +179,32 @@ async def accept_battle(event):
 
 @bot.on(events.CallbackQuery(pattern=r"decline_(\d+)_(\d+)"))
 async def decline_battle(event):
+    """Handle battle decline."""
     challenger_id, _ = map(int, event.data.decode().split("_")[1:])
     await event.answer("❌ Battle Declined", alert=True)
     await bot.send_message(challenger_id, "⚠️ Your opponent declined the battle!")
 
 async def start_round(player_id):
+    """Start a new round of the battle."""
     buttons = get_stat_buttons()
     await bot.send_message(player_id, "🎮 **Choose a stat for this round!**", buttons=buttons)
+
 @bot.on(events.CallbackQuery(pattern=r"pick_(.+)"))
 async def handle_pick_stat(event):
+    """Handle stat selection for the battle round."""
     user_id = event.sender_id
-    stat_choice = event.data.decode().split("_", 1)[1]  
+    stat_choice = event.data.decode().split("_", 1)[1]  # Extract the chosen stat
 
     if user_id not in battle_data:
         await event.answer("⚠️ You're not in an active battle!", alert=True)
         return
 
+    # Map button callback data to stat keys
     stat_map = {
         "hp": "hp",
         "attack": "attack",
         "defense": "defense",
-        "sp_attack": "special_attack",  
+        "sp_attack": "special_attack",
         "sp_defense": "special_defense",
         "speed": "speed"
     }
@@ -194,16 +217,23 @@ async def handle_pick_stat(event):
     battle = battle_data[user_id]
     opponent_id = battle["opponent"]
 
-    # Edit message to remove buttons
-    await event.edit("✅ You have chosen a stat!")
+    # Store the chosen stat
+    battle_data[user_id]["chosen_stat"] = chosen_stat
+    print(f"Player {user_id} chose stat: {chosen_stat}")
 
-    if "chosen_stat" in battle_data[opponent_id]:  
-        await compare_stats(user_id, opponent_id, chosen_stat)
+    await event.edit(f"✅ You have chosen **{chosen_stat.upper()}**!,Wait for your turn")
+
+    # Check if opponent has chosen a stat
+    if "chosen_stat" in battle_data[opponent_id]:
+        await compare_stats(user_id, opponent_id)
     else:
-        battle_data[user_id]["chosen_stat"] = chosen_stat
         await bot.send_message(opponent_id, "🔹 Your opponent has chosen a stat! Choose yours now.", buttons=get_stat_buttons())
 
-async def compare_stats(player1, player2, stat_choice):
+async def compare_stats(player1, player2):
+    """Compare stats and determine the round winner."""
+    if not battle_data.get(player1) or not battle_data.get(player2):
+        return
+
     if not battle_data[player1]["pokemon"] or not battle_data[player2]["pokemon"]:
         await declare_winner(player1, player2)
         return
@@ -211,11 +241,20 @@ async def compare_stats(player1, player2, stat_choice):
     p1_pokemon = battle_data[player1]["pokemon"].pop(0)
     p2_pokemon = battle_data[player2]["pokemon"].pop(0)
 
-    p1_stats = get_pokemon_stats(p1_pokemon)
-    p2_stats = get_pokemon_stats(p2_pokemon)
+    p1_stats = get_pokemon_stats(p1_pokemon) or {}
+    p2_stats = get_pokemon_stats(p2_pokemon) or {}
 
-    stat_value_1 = p1_stats.get(stat_choice, 0)
-    stat_value_2 = p2_stats.get(stat_choice, 0)
+    # Get each player's chosen stat
+    stat1 = battle_data[player1].pop("chosen_stat")
+    stat2 = battle_data[player2].pop("chosen_stat")
+
+    print(f"Comparing stats for {p1_pokemon} ({stat1}) vs {p2_pokemon} ({stat2})")
+
+    stat_value_1 = p1_stats.get(stat1, 0)
+    stat_value_2 = p2_stats.get(stat2, 0)
+
+    print(f"{p1_pokemon} {stat1}: {stat_value_1}")
+    print(f"{p2_pokemon} {stat2}: {stat_value_2}")
 
     winner = None
     if stat_value_1 > stat_value_2:
@@ -223,7 +262,7 @@ async def compare_stats(player1, player2, stat_choice):
     elif stat_value_1 < stat_value_2:
         winner = player2
 
-    result_message = f"⚔️ **{p1_pokemon}** ({stat_value_1}) vs **{p2_pokemon}** ({stat_value_2})\n"
+    result_message = f"⚔️ **{p1_pokemon}** ({stat1.upper()}: {stat_value_1}) vs **{p2_pokemon}** ({stat2.upper()}: {stat_value_2})\n"
 
     if winner:
         battle_data[winner]["score"] += 1
@@ -235,9 +274,9 @@ async def compare_stats(player1, player2, stat_choice):
     await bot.send_message(player1, result_message)
     await bot.send_message(player2, result_message)
 
-    # **Fix: Reset `chosen_stat` for both players**
-    battle_data[player1].pop("chosen_stat", None)
-    battle_data[player2].pop("chosen_stat", None)
+    # Track round history
+    battle_data[player1].setdefault("round_history", []).append(result_message)
+    battle_data[player2].setdefault("round_history", []).append(result_message)
 
     # If both players have Pokémon left, start the next round
     if battle_data[player1]["pokemon"]:
@@ -247,37 +286,65 @@ async def compare_stats(player1, player2, stat_choice):
 
 
 async def declare_winner(player1, player2):
-    score1 = battle_data[player1]["score"]
-    score2 = battle_data[player2]["score"]
+    if player1 not in battle_data or player2 not in battle_data:
+        return
+
+    score1 = battle_data[player1].get("score", 0)
+    score2 = battle_data[player2].get("score", 0)
 
     player1_entity = await bot.get_entity(player1)
     player2_entity = await bot.get_entity(player2)
 
-    message = "🏆 **Battle Over! Final Scores:**\n"
-    message += f"🔹 {player1_entity.first_name}: {score1} Wins\n"
-    message += f"🔹 {player2_entity.first_name}: {score2} Wins\n"
+    # Build the final battle summary
+    summary = "\U0001F3C6 **Battle Over! Final Scores:**\n"
+    summary += f"\U0001F539 {player1_entity.first_name}: {score1} Wins\n"
+    summary += f"\U0001F539 {player2_entity.first_name}: {score2} Wins\n\n"
+    summary += "**Round History:**\n"
+
+    for i, result in enumerate(battle_data[player1].get("round_history", []), start=1):
+        summary += f"**Round {i}**\n{result}\n"
+
+    # Determine the winner and loser
+    winner_id = player1 if score1 > score2 else player2
+    loser_id = player2 if winner_id == player1 else player1
 
     if score1 > score2:
-        message += f"\n🥇 **{player1_entity.first_name} is the champion!**"
+        summary += f"\n\U0001F3C5 **{player1_entity.first_name} is the champion!**"
     elif score2 > score1:
-        message += f"\n🥇 **{player2_entity.first_name} is the champion!**"
+        summary += f"\n\U0001F3C5 **{player2_entity.first_name} is the champion!**"
     else:
-        message += "\n⚖️ **It's a tie!**"
+        summary += "\n⚖️ **It's a tie!**"
 
-    await bot.send_message(player1, message)
-    await bot.send_message(player2, message)
+    # Distribute rewards
+    winner_reward, loser_reward = distribute_rewards(winner_id, loser_id, score1, score2)
 
+    # Notify players of their rewards
+    await bot.send_message(winner_id, f"\U0001F3C6 You won the battle and earned {winner_reward} PokéCoins!")
+    await bot.send_message(loser_id, f"\U0001F494 You lost the battle but earned {loser_reward} PokéCoins!")
+
+    # Send the summary to both players
+    await bot.send_message(player1, summary)
+    await bot.send_message(player2, summary)
+
+    # Clean up battle data
     del battle_data[player1]
     del battle_data[player2]
 
-
 def get_stat_buttons():
     return [
-        [Button.inline("❤️ HP", "pick_hp"), Button.inline("⚔️ Attack", "pick_attack")],
-        [Button.inline("🛡 Defense", "pick_defense"), Button.inline("🔥 Sp. Attack", "pick_sp_attack")],
-        [Button.inline("🌀 Sp. Defense", "pick_sp_defense"), Button.inline("⚡ Speed", "pick_speed")]
+        [Button.inline("❤️ HP", "pick_hp"), Button.inline("⚔️ ATK", "pick_attack")],
+        [Button.inline("🛡 DEF", "pick_defense"), Button.inline("🔥 SP. ATK", "pick_sp_attack")],
+        [Button.inline("🌀 SP. DEF", "pick_sp_defense"), Button.inline("⚡ SPD", "pick_speed")]
     ]
 
+
+
+@bot.on(events.NewMessage(pattern="/myinventory"))
+async def my_inventory(event):
+    user_id = event.sender_id
+    pokecoins = get_pokecoins(user_id)
+
+    await event.reply(f"💰 **Your PokéCoins:** {pokecoins}")
 
 
 
