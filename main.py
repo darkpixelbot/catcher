@@ -1,5 +1,5 @@
 from telethon import TelegramClient, events,Button
-from config import API_ID, API_HASH, BOT_TOKEN
+from config import API_ID, API_HASH, BOT_TOKEN, BOT_OWNER_ID
 from database import init_db, add_user, add_pokemon, get_collection,distribute_rewards,get_pokecoins
 from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_stats
 import random
@@ -348,9 +348,8 @@ async def my_inventory(event):
 
     await event.reply(f"💰 **Your PokéCoins:** {pokecoins}")
 
-from flask import Flask, send_file
+from flask import Flask
 import threading
-import os
 
 app = Flask(__name__)
 
@@ -358,18 +357,25 @@ app = Flask(__name__)
 def home():
     return "Bot is running"
 
-@app.route('/download_db')
-def download_db():
-    db_path = os.path.abspath("pokemon_game.db")  # Ensure correct path
-    if os.path.exists(db_path):
-        return send_file(db_path, as_attachment=True)
-    else:
-        return "Database file not found", 404
-
 def run_server():
     app.run(host="0.0.0.0", port=8000)
 
 threading.Thread(target=run_server, daemon=True).start()
+
+
+@client.on(events.NewMessage(pattern="/backup"))
+async def backup(event):
+    if event.sender_id != BOT_OWNER_ID:
+        await event.reply("You are not authorized to use this command.")
+        return
+
+    db_path = "pokemon_game.db"
+
+    if os.path.exists(db_path):
+        await client.send_file(event.chat_id, db_path, caption="Here is the latest database backup.")
+    else:
+        await event.reply("Database file not found.")
+
 
 
 init_db()
