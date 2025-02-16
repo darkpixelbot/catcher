@@ -5,12 +5,6 @@ from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_sta
 import random
 import asyncio
 import os
-import os
-
-# Remove old session files if they exist
-for session_file in ["bot_session.session", "bot_session.session-journal"]:
-    if os.path.exists(session_file):
-        os.remove(session_file)
 
 bot = TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
@@ -354,7 +348,7 @@ async def my_inventory(event):
 
     await event.reply(f"💰 **Your PokéCoins:** {pokecoins}")
 
-from flask import Flask
+from flask import Flask, send_file
 import threading
 
 app = Flask(__name__)
@@ -363,10 +357,15 @@ app = Flask(__name__)
 def home():
     return "Bot is running"
 
+@app.route('/download_db')
+def download_db():
+    return send_file("pokemon_game.db", as_attachment=True)
+
 def run_server():
     app.run(host="0.0.0.0", port=8000)
 
 threading.Thread(target=run_server, daemon=True).start()
+
 
 
 init_db()
