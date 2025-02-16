@@ -367,6 +367,9 @@ def run_server():
 threading.Thread(target=run_server, daemon=True).start()
 
 
+print(os.path.exists("pokemon_game.db"))  # Should print True if it exists
+
+
 
 init_db()
 print("Bot is running...")
