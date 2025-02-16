@@ -363,7 +363,7 @@ def run_server():
 threading.Thread(target=run_server, daemon=True).start()
 
 
-@client.on(events.NewMessage(pattern="/backup"))
+@bot.on(events.NewMessage(pattern="/backup"))
 async def backup(event):
     if event.sender_id != BOT_OWNER_ID:
         await event.reply("You are not authorized to use this command.")
@@ -372,7 +372,7 @@ async def backup(event):
     db_path = "pokemon_game.db"
 
     if os.path.exists(db_path):
-        await client.send_file(event.chat_id, db_path, caption="Here is the latest database backup.")
+        await bot.send_file(event.chat_id, db_path, caption="Here is the latest database backup.")
     else:
         await event.reply("Database file not found.")
 
