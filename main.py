@@ -366,9 +366,10 @@ def run_server():
 
 threading.Thread(target=run_server, daemon=True).start()
 
-
-print(os.path.exists("pokemon_game.db"))  # Should print True if it exists
-
+if os.path.exists("pokemon_game.db"):
+    print("✅ Database file found: pokemon_game.db")
+else:
+    print("❌ Database file NOT found!")
 
 
 init_db()
