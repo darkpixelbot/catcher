@@ -350,6 +350,7 @@ async def my_inventory(event):
 
 from flask import Flask, send_file
 import threading
+import os
 
 app = Flask(__name__)
 
@@ -359,17 +360,16 @@ def home():
 
 @app.route('/download_db')
 def download_db():
-    return send_file("pokemon_game.db", as_attachment=True)
+    db_path = os.path.abspath("pokemon_game.db")  # Ensure correct path
+    if os.path.exists(db_path):
+        return send_file(db_path, as_attachment=True)
+    else:
+        return "Database file not found", 404
 
 def run_server():
     app.run(host="0.0.0.0", port=8000)
 
 threading.Thread(target=run_server, daemon=True).start()
-
-if os.path.exists("pokemon_game.db"):
-    print("✅ Database file found: pokemon_game.db")
-else:
-    print("❌ Database file NOT found!")
 
 
 init_db()
