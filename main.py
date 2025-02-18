@@ -17,7 +17,6 @@ current_pokemon = None
 async def start(event):
     await event.reply("Welcome to the Pokémon Catcher Game! Keep chatting to spawn Pokémon!")
 
-
 # Dictionary to track user pages and message IDs
 user_pages = {}
 user_messages = {}
@@ -49,7 +48,7 @@ async def my_collection(event):
 async def send_collection_page(event, user_id, pokemon_list):
     page = user_pages.get(user_id, 0)
     per_page = 10  # Consistent value for pagination
-    total_pages = (len(pokemon_list) // per_page) + 1  # Corrected the formula for total pages
+    total_pages = (len(pokemon_list) // per_page) + (1 if len(pokemon_list) % per_page > 0 else 0)  # Corrected the formula for total pages
     
     start = page * per_page
     end = start + per_page
@@ -61,7 +60,11 @@ async def send_collection_page(event, user_id, pokemon_list):
     if end < len(pokemon_list):
         buttons.append(Button.inline("Next ➡", data=f"next_{user_id}"))
     
-    return await event.respond(text, buttons=buttons)
+    # Ensure that the buttons list is not empty before sending
+    if buttons:
+        return await event.respond(text, buttons=buttons)
+    else:
+        return await event.respond(text)
 
 @bot.on(events.CallbackQuery)
 async def handle_pagination(event):
@@ -103,6 +106,7 @@ async def handle_pagination(event):
     # Update the message and store the new message ID
     await bot.edit_message(event.chat_id, user_messages[user_id], text, buttons=buttons)
     await event.answer()
+
 
 @bot.on(events.NewMessage(pattern="/stats (.+)"))
 async def pokemon_stats(event):
