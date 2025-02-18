@@ -1,10 +1,13 @@
-from telethon import TelegramClient, events,Button
+from telethon import TelegramClient, events,Button 
 from config import API_ID, API_HASH, BOT_TOKEN, BOT_OWNER_ID
 from database import init_db, add_user, add_pokemon, get_collection,distribute_rewards,get_pokecoins
 from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_stats
 import random
 import asyncio
 import os
+from flask import Flask
+import threading
+from telethon.tl.functions.users import GetFullUserRequest
 
 bot = TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
@@ -22,9 +25,6 @@ user_messages = {}
 async def my_collection(event):
     user_id = event.sender_id
     collection = get_collection(user_id)
-    if not collection:
-        await event.answer()
-        return
 
     if not collection:
         await event.reply("❌ You haven't caught any Pokémon yet!")
@@ -43,8 +43,8 @@ async def my_collection(event):
 
 async def send_collection_page(event, user_id, pokemon_list):
     page = user_pages.get(user_id, 0)
-    per_page = 20
-    total_pages = (len(pokemon_list) - 1) // per_page + 1
+    per_page = 10  # Consistent value for pagination
+    total_pages = (len(pokemon_list))// per_page + 1
     
     start = page * per_page
     end = start + per_page
@@ -56,11 +56,16 @@ async def send_collection_page(event, user_id, pokemon_list):
     if end < len(pokemon_list):
         buttons.append(Button.inline("Next ➡", data=f"next_{user_id}"))
     
-    return await event.respond(text, buttons=[buttons] if buttons else None)
+    return await event.respond(text, buttons=buttons)
 
 @bot.on(events.CallbackQuery)
 async def handle_pagination(event):
     user_id = event.sender_id
+
+    if not event.data:
+        await event.answer()
+        return
+
     data = event.data.decode("utf-8")
 
     if user_id not in user_messages:
@@ -73,13 +78,11 @@ async def handle_pagination(event):
         user_pages[user_id] += 1
     
     collection = get_collection(user_id)
-    poke_count = {}
-    for poke in collection:
-        poke_count[poke] = poke_count.get(poke, 0) + 1
+    poke_count = {poke: collection.count(poke) for poke in set(collection)}
     pokemon_list = [f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()]
     
     page = user_pages[user_id]
-    per_page = 1
+    per_page = 10  # Consistent value for pagination
     start = page * per_page
     end = start + per_page
     text = "**📜 Your Pokémon Collection:**\n\n" + "\n".join(pokemon_list[start:end])
@@ -90,9 +93,9 @@ async def handle_pagination(event):
     if end < len(pokemon_list):
         buttons.append(Button.inline("Next ➡", data=f"next_{user_id}"))
     
-    await bot.edit_message(event.chat_id, user_messages[user_id], text, buttons=[buttons] if buttons else None)
+    # Update the message and store the new message ID
+    await bot.edit_message(event.chat_id, user_messages[user_id], text, buttons=buttons)
     await event.answer()
-
 
 
 @bot.on(events.NewMessage(pattern="/stats (.+)"))
@@ -133,9 +136,7 @@ async def message_handler(event):
         current_pokemon = get_random_pokemon()
         await bot.send_file(event.chat_id, current_pokemon["image"], caption="A wild Pokémon appeared! Reply with its name to catch it!")
 
-import random
-from telethon import events, Button
-from telethon.tl.functions.users import GetFullUserRequest
+
 
 # Global battle data storage
 battle_data = {}
@@ -395,8 +396,7 @@ async def my_inventory(event):
 
     await event.reply(f"💰 **Your PokéCoins:** {pokecoins}")
 
-from flask import Flask
-import threading
+
 
 app = Flask(__name__)
 
