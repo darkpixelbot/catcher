@@ -14,10 +14,17 @@ current_pokemon = None
 async def start(event):
     await event.reply("Welcome to the Pokémon Catcher Game! Keep chatting to spawn Pokémon!")
 
+# Dictionary to track user pages and message IDs
+user_pages = {}
+user_messages = {}
+
 @bot.on(events.NewMessage(pattern="/mycollection"))
 async def my_collection(event):
     user_id = event.sender_id
     collection = get_collection(user_id)
+    if not collection:
+        await event.answer()
+        return
 
     if not collection:
         await event.reply("❌ You haven't caught any Pokémon yet!")
@@ -28,25 +35,65 @@ async def my_collection(event):
     for poke in collection:
         poke_count[poke] = poke_count.get(poke, 0) + 1
 
-    # Build formatted message
-    message = "**📜 Your Pokémon Collection:**\n\n"
-    rows = []
-    row = []
+    pokemon_list = [f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()]
+    user_pages[user_id] = 0  # Start from page 0
+    
+    message = await send_collection_page(event, user_id, pokemon_list)
+    user_messages[user_id] = message.id  # Store the bot's message ID
 
-    for name, count in poke_count.items():
-        entry = f"**{name}** x{count}" if count > 1 else f"**{name}**"
-        row.append(entry)
+async def send_collection_page(event, user_id, pokemon_list):
+    page = user_pages.get(user_id, 0)
+    per_page = 20
+    total_pages = (len(pokemon_list) - 1) // per_page + 1
+    
+    start = page * per_page
+    end = start + per_page
+    text = "**📜 Your Pokémon Collection:**\n\n" + "\n".join(pokemon_list[start:end])
+    
+    buttons = []
+    if page > 0:
+        buttons.append(Button.inline("⬅ Previous", data=f"prev_{user_id}"))
+    if end < len(pokemon_list):
+        buttons.append(Button.inline("Next ➡", data=f"next_{user_id}"))
+    
+    return await event.respond(text, buttons=[buttons] if buttons else None)
 
-        # Format 3 Pokémon per row
-        if len(row) == 3:
-            rows.append(" | ".join(row))
-            row = []
+@bot.on(events.CallbackQuery)
+async def handle_pagination(event):
+    user_id = event.sender_id
+    data = event.data.decode("utf-8")
 
-    if row:
-        rows.append(" | ".join(row))
+    if user_id not in user_messages:
+        await event.answer()
+        return
 
-    message += "\n".join(rows)
-    await event.reply(message)
+    if data.startswith("prev_"):
+        user_pages[user_id] = max(0, user_pages[user_id] - 1)
+    elif data.startswith("next_"):
+        user_pages[user_id] += 1
+    
+    collection = get_collection(user_id)
+    poke_count = {}
+    for poke in collection:
+        poke_count[poke] = poke_count.get(poke, 0) + 1
+    pokemon_list = [f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()]
+    
+    page = user_pages[user_id]
+    per_page = 1
+    start = page * per_page
+    end = start + per_page
+    text = "**📜 Your Pokémon Collection:**\n\n" + "\n".join(pokemon_list[start:end])
+    
+    buttons = []
+    if page > 0:
+        buttons.append(Button.inline("⬅ Previous", data=f"prev_{user_id}"))
+    if end < len(pokemon_list):
+        buttons.append(Button.inline("Next ➡", data=f"next_{user_id}"))
+    
+    await bot.edit_message(event.chat_id, user_messages[user_id], text, buttons=[buttons] if buttons else None)
+    await event.answer()
+
+
 
 @bot.on(events.NewMessage(pattern="/stats (.+)"))
 async def pokemon_stats(event):
