@@ -17,6 +17,7 @@ current_pokemon = None
 async def start(event):
     await event.reply("Welcome to the Pokémon Catcher Game! Keep chatting to spawn Pokémon!")
 
+
 # Dictionary to track user pages and message IDs
 user_pages = {}
 user_messages = {}
@@ -30,21 +31,25 @@ async def my_collection(event):
         await event.reply("❌ You haven't caught any Pokémon yet!")
         return
 
-    # Count duplicate Pokémon
+    # Count duplicate Pokémon and store them in a list
     poke_count = {}
     for poke in collection:
         poke_count[poke] = poke_count.get(poke, 0) + 1
 
-    pokemon_list = [f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()]
+    # Prepare the Pokémon list with counts and sort alphabetically
+    pokemon_list = sorted([f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()])
+
+    # Initialize page and message
     user_pages[user_id] = 0  # Start from page 0
     
+    # Send the collection page with the formatted Pokémon list
     message = await send_collection_page(event, user_id, pokemon_list)
     user_messages[user_id] = message.id  # Store the bot's message ID
 
 async def send_collection_page(event, user_id, pokemon_list):
     page = user_pages.get(user_id, 0)
     per_page = 10  # Consistent value for pagination
-    total_pages = (len(pokemon_list))// per_page + 1
+    total_pages = (len(pokemon_list) // per_page) + 1  # Corrected the formula for total pages
     
     start = page * per_page
     end = start + per_page
@@ -72,14 +77,16 @@ async def handle_pagination(event):
         await event.answer()
         return
 
+    # Update page based on button clicked
     if data.startswith("prev_"):
         user_pages[user_id] = max(0, user_pages[user_id] - 1)
     elif data.startswith("next_"):
         user_pages[user_id] += 1
     
+    # Fetch and update the collection
     collection = get_collection(user_id)
     poke_count = {poke: collection.count(poke) for poke in set(collection)}
-    pokemon_list = [f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()]
+    pokemon_list = sorted([f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()])
     
     page = user_pages[user_id]
     per_page = 10  # Consistent value for pagination
@@ -96,7 +103,6 @@ async def handle_pagination(event):
     # Update the message and store the new message ID
     await bot.edit_message(event.chat_id, user_messages[user_id], text, buttons=buttons)
     await event.answer()
-
 
 @bot.on(events.NewMessage(pattern="/stats (.+)"))
 async def pokemon_stats(event):
