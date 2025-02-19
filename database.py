@@ -1,4 +1,6 @@
 import sqlite3
+import random
+import requests
 
 # Database path
 DB_PATH = "pokemon_game.db"
@@ -132,3 +134,146 @@ def update_battle_wins(user_id):
     cursor.execute("UPDATE users SET battle_wins = battle_wins + 1 WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
+
+
+
+def evolve_pokemon(user_id, current_pokemon, evolved_pokemon):
+    """Replaces a Pokémon in the user's collection with its evolved form."""
+    conn, cursor = get_db_connection()
+
+    try:
+        cursor.execute("SELECT rowid FROM catches WHERE user_id = ? AND pokemon = ? LIMIT 1", (user_id, current_pokemon))
+        row = cursor.fetchone()
+
+        if row:
+            cursor.execute("DELETE FROM catches WHERE rowid = ?", (row[0],))
+            cursor.execute("INSERT INTO catches (user_id, pokemon) VALUES (?, ?)", (user_id, evolved_pokemon))
+            conn.commit()
+            print(f"🟢 {current_pokemon} evolved into {evolved_pokemon} for user {user_id}")  # Debug message
+    except Exception as e:
+        print(f"🔴 Database Error: {e}")  # Debug error
+    finally:
+        conn.close()
+        print("🟢 Database connection closed.")  # Debug: Ensure DB closes
+
+
+def setup_shop():
+    """Creates the shop and purchases tables if they don't exist."""
+    conn, cursor = get_db_connection()
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS shop (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pokemon TEXT,
+            price INTEGER,
+            date TEXT DEFAULT (DATE('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS purchases (
+            user_id INTEGER,
+            pokemon TEXT,
+            date TEXT DEFAULT (DATE('now')),
+            PRIMARY KEY (user_id, pokemon, date)
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+
+
+
+
+def refresh_shop():
+    """Generates a new set of Pokémon for the daily shop."""
+    conn, cursor = get_db_connection()
+
+    # Check if the shop already has Pokémon for today
+    cursor.execute("SELECT 1 FROM shop WHERE date = DATE('now')")
+    if cursor.fetchone():
+        conn.close()
+        return  # Shop is already set for today
+
+    # Clear old shop entries
+    cursor.execute("DELETE FROM shop WHERE date != DATE('now')")
+
+    # Get 5 random Pokémon (limit to 151 for now)
+    random_pokemon = random.sample(range(1, 151), 5)
+
+    # Insert new Pokémon with random prices (50-200 PokéCoins)
+    for poke_id in random_pokemon:
+        response = requests.get(f"https://pokeapi.co/api/v2/pokemon/{poke_id}")
+        if response.status_code == 200:
+            pokemon_name = response.json()["name"]
+            price = random.randint(50, 200)
+            cursor.execute("INSERT INTO shop (pokemon, price) VALUES (?, ?)", (pokemon_name, price))
+
+    conn.commit()
+    conn.close()
+
+
+def buy_pokemon(user_id, pokemon_name):
+    """Handles purchasing Pokémon if the user has enough coins and hasn't bought it today."""
+    conn, cursor = get_db_connection()
+
+    # Check if Pokémon is in the shop today
+    cursor.execute("SELECT price FROM shop WHERE pokemon = ? AND date = DATE('now')", (pokemon_name,))
+    shop_entry = cursor.fetchone()
+
+    if not shop_entry:
+        conn.close()
+        return "❌ This Pokémon is not available in today's shop!"
+
+    price = shop_entry[0]
+
+    # Check user's PokéCoins balance
+    cursor.execute("SELECT pokecoins FROM users WHERE user_id = ?", (user_id,))
+    user_coins = cursor.fetchone()[0]
+
+    if user_coins < price:
+        conn.close()
+        return "❌ You don't have enough PokéCoins to buy this Pokémon!"
+
+    # Check if user already purchased this Pokémon today
+    cursor.execute("SELECT 1 FROM purchases WHERE user_id = ? AND pokemon = ? AND date = DATE('now')", (user_id, pokemon_name))
+    if cursor.fetchone():
+        conn.close()
+        return "❌ You have already purchased this Pokémon today!"
+
+    # Deduct PokéCoins and add Pokémon to user's collection
+    cursor.execute("UPDATE users SET pokecoins = pokecoins - ? WHERE user_id = ?", (price, user_id))
+    cursor.execute("INSERT INTO purchases (user_id, pokemon) VALUES (?, ?)", (user_id, pokemon_name))
+    cursor.execute("INSERT INTO catches (user_id, pokemon) VALUES (?, ?)", (user_id, pokemon_name))
+
+    conn.commit()
+    conn.close()
+    return f"✅ You successfully bought {pokemon_name.capitalize()} for {price} PokéCoins!"
+
+def add_resource(user_id, resource, amount):
+    """Adds PokéCoins to a specific user."""
+    conn, cursor = get_db_connection()
+
+    if resource == "pokecoins":
+        cursor.execute("UPDATE users SET pokecoins = pokecoins + ? WHERE user_id = ?", (amount, user_id))
+    else:
+        conn.close()
+        return f"❌ Invalid resource: {resource}"
+
+    conn.commit()
+    conn.close()
+    return f"✅ Successfully added {amount} {resource.capitalize()} to user {user_id}!"
+
+
+def add_pokemon_to_user(user_id, pokemon_name):
+    """Adds a Pokémon to the user's collection and ensures the database is updated properly."""
+    conn, cursor = get_db_connection()
+    try:
+        print(f"🟢 Attempting to add {pokemon_name.capitalize()} to User {user_id}")  # Debug log
+        cursor.execute("INSERT INTO catches (user_id, pokemon) VALUES (?, ?)", (user_id, pokemon_name))
+        conn.commit()
+        print(f"✅ {pokemon_name.capitalize()} successfully added to User {user_id}")  # Debug log
+        return f"✅ Successfully added {pokemon_name.capitalize()} to user {user_id}!"
+    except sqlite3.Error as e:
+        print(f"🔴 Database Error: {e}")  # Debug log
+        return f"❌ Database Error: {e}"
+    finally:
+        conn.close()
+
