@@ -1,7 +1,8 @@
 from telethon import TelegramClient, events,Button 
 from config import API_ID, API_HASH, BOT_TOKEN, BOT_OWNER_ID
 from database import init_db, add_user, add_pokemon, get_collection,distribute_rewards,get_pokecoins
-from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_stats
+from database import setup_shop,add_resource,add_pokemon_to_user,evolve_pokemon,get_db_connection,refresh_shop,buy_pokemon
+from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_stats,get_next_evolution
 import random
 import asyncio
 import os
@@ -15,7 +16,19 @@ current_pokemon = None
 
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
-    await event.reply("Welcome to the Pokémon Catcher Game! Keep chatting to spawn Pokémon!")
+    user_id = event.sender_id
+    username = event.sender.username
+
+    # Try to add the user (INSERT OR IGNORE prevents duplicates)
+    add_user(user_id, username)
+
+    # Check if the user was added (if they already existed, fetch their data)
+    collection = get_collection(user_id)  # Checking if user has Pokémon
+
+    if collection:  
+        await event.reply("✅ You have already started the Pokémon Catcher Game!")
+    else:
+        await event.reply("🎉 Welcome to the Pokémon Catcher Game! Keep chatting to spawn Pokémon!")
 
 # Dictionary to track user pages and message IDs
 user_pages = {}
@@ -106,28 +119,6 @@ async def handle_pagination(event):
     # Update the message and store the new message ID
     await bot.edit_message(event.chat_id, user_messages[user_id], text, buttons=buttons)
     await event.answer()
-
-
-@bot.on(events.NewMessage(pattern="/stats (.+)"))
-async def pokemon_stats(event):
-    pokemon_name = event.pattern_match.group(1)
-    stats = get_pokemon_stats(pokemon_name)
-    
-    if stats:
-        message = (
-            f"📊 **{stats['name']} Stats:**\n"
-            f"❤️ HP: {stats['hp']}\n"
-            f"⚔️ Attack: {stats['attack']}\n"
-            f"🛡️ Defense: {stats['defense']}\n"
-            f"🔴 Sp. Attack: {stats['special_attack']}\n"
-            f"🔵 Sp. Defense: {stats['special_defense']}\n"
-            f"⚡ Speed: {stats['speed']}"
-        )
-        await bot.send_file(event.chat_id, stats["image"], caption=message)
-    else:
-        await event.reply("❌ Pokémon not found! Make sure you entered the correct name.")
-
-
 
 @bot.on(events.NewMessage)
 async def message_handler(event):
@@ -408,6 +399,180 @@ async def my_inventory(event):
 
 
 
+@bot.on(events.NewMessage(pattern="/stats (.+)"))
+async def pokemon_stats(event):
+    user_id = event.sender_id
+    pokemon_name = event.pattern_match.group(1).strip().lower()
+
+    # Check if the Pokémon is in the user's collection
+    collection = get_collection(user_id)
+
+    if not collection or pokemon_name not in [poke.lower() for poke in collection]:
+        await event.reply(f"❌ You don’t own {pokemon_name.capitalize()}!")
+        return
+
+    # Get Pokémon stats
+    stats = get_pokemon_stats(pokemon_name)
+    
+    if not stats:
+        await event.reply("❌ Pokémon not found! Make sure you entered the correct name.")
+        return
+
+    # Count how many of this Pokémon the user owns
+    pokemon_count = sum(1 for poke in collection if poke.lower() == pokemon_name)
+
+    # Get evolution details
+    evolved_pokemon = get_next_evolution(pokemon_name)
+    evolve_button = None  # Default: No button
+
+    if evolved_pokemon:
+        next_evolution = get_next_evolution(evolved_pokemon)  # Check if it's final form
+        required_count = 10 if next_evolution else 20  # 1 for second form, 2 for final form
+
+        # Button text logic
+        if pokemon_count >= required_count:
+            button_text = f"✅ Ready to Evolve! ({pokemon_count}/{required_count})"
+        else:
+            button_text = f"🔄 Evolve ({pokemon_count}/{required_count})"
+
+        # Create button
+        evolve_button = [[Button.inline(button_text, f"evolve_{pokemon_name}")]]
+    
+    # Build stats message
+    message = (
+        f"📊 **{stats['name']} Stats:**\n"
+        f"❤️ HP: {stats['hp']}\n"
+        f"⚔️ Attack: {stats['attack']}\n"
+        f"🛡️ Defense: {stats['defense']}\n"
+        f"🔴 Sp. Attack: {stats['special_attack']}\n"
+        f"🔵 Sp. Defense: {stats['special_defense']}\n"
+        f"⚡ Speed: {stats['speed']}"
+    )
+
+    await bot.send_file(event.chat_id, stats["image"], caption=message, buttons=evolve_button)
+
+
+@bot.on(events.CallbackQuery(pattern=r"evolve_(.+)"))
+async def evolve_button(event):
+    user_id = event.sender_id
+    pokemon_name = event.data.decode().split("_", 1)[1]  # Get the Pokémon name
+
+    collection = get_collection(user_id)
+
+    if pokemon_name not in [poke.lower() for poke in collection]:
+        await event.answer(f"❌ You no longer have {pokemon_name.capitalize()}!", alert=True)
+        return
+
+    evolved_pokemon = get_next_evolution(pokemon_name)
+
+    if not evolved_pokemon:
+        await event.answer(f"❌ {pokemon_name.capitalize()} cannot evolve further!", alert=True)
+        return
+
+    # Count how many of this Pokémon the user has
+    pokemon_count = sum(1 for poke in collection if poke.lower() == pokemon_name)
+    next_evolution = get_next_evolution(evolved_pokemon)  # Check if it's the final form
+    required_count = 10 if next_evolution else 20  # 1 Pokémon for 2nd form, 2 for final form
+
+    if pokemon_count < required_count:
+        await event.answer(f"❌ You need at least {required_count} copies of {pokemon_name.capitalize()} to evolve!", alert=True)
+        return
+
+    # Perform Evolution: Remove base form & add evolved form
+    evolve_pokemon(user_id, pokemon_name, evolved_pokemon)  # Database update
+
+    # Fetch new stats and image
+    evolved_stats = get_pokemon_stats(evolved_pokemon)
+    
+    if evolved_stats:
+        # Build new stats message
+        new_message = (
+            f"🎉 **{pokemon_name.capitalize()} evolved into {evolved_pokemon.capitalize()}!** ✨\n\n"
+            f"📊 **{evolved_stats['name']} Stats:**\n"
+            f"❤️ HP: {evolved_stats['hp']}\n"
+            f"⚔️ Attack: {evolved_stats['attack']}\n"
+            f"🛡️ Defense: {evolved_stats['defense']}\n"
+            f"🔴 Sp. Attack: {evolved_stats['special_attack']}\n"
+            f"🔵 Sp. Defense: {evolved_stats['special_defense']}\n"
+            f"⚡ Speed: {evolved_stats['speed']}"
+        )
+
+        # Send updated message with the evolved Pokémon's image
+        await event.edit(new_message, file=evolved_stats["image"], buttons=None)
+    else:
+        await event.edit(f"🎉 **{pokemon_name.capitalize()} evolved into {evolved_pokemon.capitalize()}!** ✨")
+
+
+@bot.on(events.NewMessage(pattern="/shop"))
+async def shop(event):
+    user_id = event.sender_id
+
+    refresh_shop()  # Ensure shop is set for today
+
+    # Get today's Pokémon shop list
+    conn, cursor = get_db_connection()
+    cursor.execute("SELECT pokemon, price FROM shop WHERE date = DATE('now')")
+    shop_items = cursor.fetchall()
+    conn.close()
+
+    if not shop_items:
+        await event.reply("❌ No Pokémon available in the shop today. Try again tomorrow!")
+        return
+
+    message = "🛒 **Today's Pokémon Shop:**\n\n"
+    buttons = []
+
+    for pokemon, price in shop_items:
+        message += f"🔹 **{pokemon.capitalize()}** - 💰 {price} PokéCoins\n"
+        buttons.append([Button.inline(f"Buy {pokemon.capitalize()} ({price})", f"buy_{pokemon}")])
+
+    await event.reply(message, buttons=buttons)
+
+
+@bot.on(events.CallbackQuery(pattern=r"buy_(.+)"))
+async def buy_button(event):
+    user_id = event.sender_id
+    pokemon_name = event.data.decode().split("_", 1)[1]  # Extract Pokémon name
+
+    result = buy_pokemon(user_id, pokemon_name)
+    await event.answer(result, alert=True)
+
+
+@bot.on(events.NewMessage(pattern=r"/add (\w+) (\S+) (\d+)"))
+async def add_resource_command(event):
+    sender_id = event.sender_id
+    if sender_id != BOT_OWNER_ID:
+        await event.reply("❌ You are not authorized to use this command!")
+        return
+
+    resource = event.pattern_match.group(1).lower()  # Resource type (pokecoins/pokemon)
+    amount_or_pokemon = event.pattern_match.group(2)  # Amount or Pokémon name
+    target_user_id = int(event.pattern_match.group(3))  # Target user ID
+
+    print(f"🟢 /add command received: {resource} {amount_or_pokemon} for User {target_user_id}")  # Debug log
+
+    if resource == "pokecoins":
+        amount = int(amount_or_pokemon)
+        if amount <= 0:
+            await event.reply("❌ Amount must be greater than zero!")
+            return
+        result = add_resource(target_user_id, "pokecoins", amount)
+
+    elif resource == "pokemon":
+        pokemon_name = amount_or_pokemon.lower()
+        add_pokemon(target_user_id, pokemon_name)  # Use your existing function
+        result = f"✅ Successfully added {pokemon_name.capitalize()} to user {target_user_id}!"
+
+    else:
+        result = "❌ Invalid resource! Use `pokecoins` or `pokemon`."
+
+    print(f"🟢 Result: {result}")  # Debug log
+    await event.reply(result)
+
+
+
+
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -434,7 +599,7 @@ async def backup(event):
         await event.reply("Database file not found.")
 
 
-
+setup_shop()
 init_db()
 print("Bot is running...")
 bot.run_until_disconnected()
