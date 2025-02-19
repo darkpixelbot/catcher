@@ -1,8 +1,8 @@
 from telethon import TelegramClient, events,Button 
 from config import API_ID, API_HASH, BOT_TOKEN, BOT_OWNER_ID
-from database import init_db, add_user, add_pokemon, get_collection,distribute_rewards,get_pokecoins
+from database import init_db, add_user, add_pokemon, get_collection,distribute_rewards,get_pokecoins,set_drop_time
 from database import setup_shop,add_resource,add_pokemon_to_user,evolve_pokemon,get_db_connection,refresh_shop,buy_pokemon
-from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_stats,get_next_evolution
+from game_logic import get_random_pokemon, should_spawn_pokemon, get_pokemon_stats,get_next_evolution,thresholds
 import random
 import asyncio
 import os
@@ -598,6 +598,25 @@ async def backup(event):
     else:
         await event.reply("Database file not found.")
 
+@bot.on(events.NewMessage(pattern=r"/drop_time (\d+)"))
+async def change_threshold(event):
+    sender_id = event.sender_id
+    chat_id = event.chat_id  # Get the group ID
+
+    if sender_id != BOT_OWNER_ID:
+        await event.reply("❌ You are not authorized to change the drop time!")
+        return
+
+    new_threshold = int(event.pattern_match.group(1))
+
+    if new_threshold < 1:
+        await event.reply("❌ Threshold must be at least 1!")
+        return
+
+    # Update the threshold for this specific group in the database
+    set_drop_time(chat_id, new_threshold)
+
+    await event.reply(f"✅ Pokémon spawn threshold updated to **{new_threshold} messages** for this group!")
 
 setup_shop()
 init_db()
