@@ -43,81 +43,83 @@ async def my_collection(event):
         await event.reply("❌ You haven't caught any Pokémon yet!")
         return
 
-    # Count duplicate Pokémon and store them in a list
-    poke_count = {}
-    for poke in collection:
-        poke_count[poke] = poke_count.get(poke, 0) + 1
+    # Count duplicate Pokémon
+    poke_count = {poke: collection.count(poke) for poke in set(collection)}
 
     # Prepare the Pokémon list with counts and sort alphabetically
     pokemon_list = sorted([f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()])
 
-    # Initialize page and message
-    user_pages[user_id] = 0  # Start from page 0
-    
-    # Send the collection page with the formatted Pokémon list
+    # Initialize user page tracking
+    user_pages[user_id] = 0  
+
+    # Send the first page of the collection
     message = await send_collection_page(event, user_id, pokemon_list)
-    user_messages[user_id] = message.id  # Store the bot's message ID
+    user_messages[user_id] = message.id  # Store message ID
 
 async def send_collection_page(event, user_id, pokemon_list):
+    """Sends a paginated view of the user's Pokémon collection."""
     page = user_pages.get(user_id, 0)
-    per_page = 10  # Consistent value for pagination
-    total_pages = (len(pokemon_list) // per_page) + (1 if len(pokemon_list) % per_page > 0 else 0)  # Corrected the formula for total pages
-    
-    start = page * per_page
-    end = start + per_page
+    per_page = 10  # Pokémon per page
+    total_pages = (len(pokemon_list) + per_page - 1) // per_page  # Calculate total pages correctly
+
+    start, end = page * per_page, (page + 1) * per_page
     text = "**📜 Your Pokémon Collection:**\n\n" + "\n".join(pokemon_list[start:end])
-    
+
+    # Create navigation buttons
     buttons = []
     if page > 0:
         buttons.append(Button.inline("⬅ Previous", data=f"prev_{user_id}"))
-    if end < len(pokemon_list):
+    if page < total_pages - 1:
         buttons.append(Button.inline("Next ➡", data=f"next_{user_id}"))
-    
-    # Ensure that the buttons list is not empty before sending
-    if buttons:
-        return await event.respond(text, buttons=buttons)
-    else:
-        return await event.respond(text)
+
+    return await event.respond(text, buttons=buttons if buttons else None)
 
 @bot.on(events.CallbackQuery)
 async def handle_pagination(event):
+    """Handles pagination when users click Next/Previous buttons."""
     user_id = event.sender_id
+    chat_id = event.chat_id
 
-    if not event.data:
+    if not event.data or user_id not in user_messages:
         await event.answer()
         return
 
     data = event.data.decode("utf-8")
 
-    if user_id not in user_messages:
-        await event.answer()
-        return
+    # Fetch the original message
+    message = await event.get_message()  # ✅ Fix: Get the message properly
 
-    # Update page based on button clicked
+    # Update page index
     if data.startswith("prev_"):
         user_pages[user_id] = max(0, user_pages[user_id] - 1)
     elif data.startswith("next_"):
         user_pages[user_id] += 1
-    
+
     # Fetch and update the collection
     collection = get_collection(user_id)
+    if not collection:
+        await event.answer("❌ No Pokémon found!", alert=True)
+        return
+
     poke_count = {poke: collection.count(poke) for poke in set(collection)}
     pokemon_list = sorted([f"**{name}** x{count}" if count > 1 else f"**{name}**" for name, count in poke_count.items()])
-    
+
     page = user_pages[user_id]
-    per_page = 10  # Consistent value for pagination
-    start = page * per_page
-    end = start + per_page
+    per_page = 10
+    start, end = page * per_page, (page + 1) * per_page
     text = "**📜 Your Pokémon Collection:**\n\n" + "\n".join(pokemon_list[start:end])
-    
+
+    # Create navigation buttons
     buttons = []
     if page > 0:
         buttons.append(Button.inline("⬅ Previous", data=f"prev_{user_id}"))
     if end < len(pokemon_list):
         buttons.append(Button.inline("Next ➡", data=f"next_{user_id}"))
-    
-    # Update the message and store the new message ID
-    await bot.edit_message(event.chat_id, user_messages[user_id], text, buttons=buttons)
+
+    # 🛠 Fix: Prevent "MessageNotModifiedError"
+    if message.text != text:  # ✅ Now using `message.text` instead of `event.message.text`
+        await bot.edit_message(chat_id, user_messages[user_id], text, buttons=buttons if buttons else None)
+
     await event.answer()
 
 @bot.on(events.NewMessage)
