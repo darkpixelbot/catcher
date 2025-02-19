@@ -1,9 +1,12 @@
 import requests
 import random
-from config import MESSAGE_THRESHOLD
+from config import DEFAULT_THRESHOLD
+from database import get_drop_time 
 
-message_count = 0
-current_pokemon = None
+message_counts = {}  # Track message counts per chat
+thresholds = {}  # Store drop time per group (defaults to DEFAULT_THRESHOLD)
+
+current_pokemon = {}  # Track spawned Pokémon per chat
 
 def get_random_pokemon():
     poke_id = random.randint(1, 151)  # Limit to Gen 1
@@ -33,14 +36,21 @@ def get_pokemon_stats(pokemon_name):
         "speed": stats["speed"]
     }
 
-def should_spawn_pokemon():
-    global message_count
-    message_count += 1
-    if message_count >= MESSAGE_THRESHOLD:
-        message_count = 0
-        return True
-    return False
+def should_spawn_pokemon(chat_id):
+    """Check if a Pokémon should spawn in this specific chat."""
+    if chat_id not in message_counts:
+        message_counts[chat_id] = 0  # Initialize count for new chat
 
+    if chat_id not in thresholds:
+        thresholds[chat_id] = DEFAULT_THRESHOLD  # Use default threshold
+
+    message_counts[chat_id] += 1
+
+    if message_counts[chat_id] >= thresholds[chat_id]:  # Use group-specific threshold
+        message_counts[chat_id] = 0  # Reset counter
+        return True
+    
+    return False
 
 def get_next_evolution(pokemon_name):
     """Fetches the correct next evolution for a Pokémon from PokeAPI.
@@ -90,3 +100,19 @@ def get_next_evolution(pokemon_name):
     except Exception as e:
         print(f"Error fetching evolution data: {e}")
         return None
+    
+
+
+def should_spawn_pokemon(chat_id):
+    """Check if a Pokémon should spawn in this specific chat."""
+    if chat_id not in message_counts:
+        message_counts[chat_id] = 0  # Initialize count for new chat
+
+    drop_time = get_drop_time(chat_id)  # Get threshold from database
+    message_counts[chat_id] += 1
+
+    if message_counts[chat_id] >= drop_time:  # Use stored threshold
+        message_counts[chat_id] = 0  # Reset counter
+        return True
+    
+    return False
