@@ -123,19 +123,38 @@ async def handle_pagination(event):
 @bot.on(events.NewMessage)
 async def message_handler(event):
     global current_pokemon
+    chat_id = event.chat_id
+
+    # Ignore PMs (Only track messages in groups)
+    if event.is_private:
+        return
+
     user_id = event.sender_id
     username = event.sender.username
     text = event.raw_text.lower()
 
     add_user(user_id, username)
 
-    if current_pokemon and text == current_pokemon["name"]:
-        add_pokemon(user_id, current_pokemon["name"])
-        await event.reply(f"🎉 {username} caught {current_pokemon['name']}! 🎉")
-        current_pokemon = None
-    elif should_spawn_pokemon():
-        current_pokemon = get_random_pokemon()
-        await bot.send_file(event.chat_id, current_pokemon["image"], caption="A wild Pokémon appeared! Reply with its name to catch it!")
+    # Ensure `current_pokemon` is a dictionary
+    if current_pokemon is None:
+        current_pokemon = {}
+
+    # Ensure `chat_id` exists in `current_pokemon` before accessing
+    if chat_id in current_pokemon and current_pokemon[chat_id] is not None:
+        if text == current_pokemon[chat_id]["name"]:
+            add_pokemon(user_id, current_pokemon[chat_id]["name"])
+            await event.reply(f"🎉 {username} caught {current_pokemon[chat_id]['name']}! 🎉")
+            current_pokemon[chat_id] = None  # Remove Pokémon from this chat
+            return  # Exit after catching
+
+    # Check if a new Pokémon should spawn in this specific chat
+    if should_spawn_pokemon(chat_id):
+        current_pokemon[chat_id] = get_random_pokemon()
+        await bot.send_file(
+            chat_id, 
+            current_pokemon[chat_id]["image"], 
+            caption="🐾 A wild Pokémon appeared! Reply with its name to catch it!"
+        )
 
 
 
