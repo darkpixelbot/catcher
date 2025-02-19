@@ -2,6 +2,7 @@ import requests
 import random
 from config import DEFAULT_THRESHOLD
 from database import get_drop_time 
+import time 
 
 message_counts = {}  # Track message counts per chat
 thresholds = {}  # Store drop time per group (defaults to DEFAULT_THRESHOLD)
@@ -10,12 +11,26 @@ current_pokemon = {}  # Track spawned Pokémon per chat
 
 def get_random_pokemon():
     poke_id = random.randint(1, 151)  # Limit to Gen 1
-    response = requests.get(f"https://pokeapi.co/api/v2/pokemon/{poke_id}")
-    data = response.json()
-    return {
-        "name": data["name"],
-        "image": data["sprites"]["other"]["official-artwork"]["front_default"]
-    }
+    url = f"https://pokeapi.co/api/v2/pokemon/{poke_id}"
+
+    for attempt in range(3):  # Retry up to 3 times
+        try:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()  # Raise error for bad responses (e.g., 404, 500)
+
+            data = response.json()
+            return {
+                "name": data["name"],
+                "image": data["sprites"]["other"]["official-artwork"]["front_default"]
+            }
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Attempt {attempt + 1}: API Request Failed - {e}")
+            time.sleep(2)  # Wait before retrying
+
+    print("❌ API request failed after 3 attempts.")
+    return None  # Return None if all retries fail
+
 
 def get_pokemon_stats(pokemon_name):
     response = requests.get(f"https://pokeapi.co/api/v2/pokemon/{pokemon_name.lower()}")
