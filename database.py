@@ -1,6 +1,7 @@
 import sqlite3
 import random
 import requests
+from config import DEFAULT_THRESHOLD
 
 # Database path
 DB_PATH = "pokemon_game.db"
@@ -31,6 +32,10 @@ def init_db():
             user_id INTEGER, 
             pokemon TEXT,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
+        CREATE TABLE IF NOT EXISTS drop_time (
+            chat_id INTEGER PRIMARY KEY,
+            threshold INTEGER DEFAULT 100
         );
     """)
     conn.commit()
@@ -277,3 +282,23 @@ def add_pokemon_to_user(user_id, pokemon_name):
     finally:
         conn.close()
 
+# ✅ Fetch Drop Time from DB
+def get_drop_time(chat_id):
+    """Retrieves the Pokémon spawn threshold for a specific chat."""
+    conn, cursor = get_db_connection()
+    cursor.execute("SELECT threshold FROM drop_time WHERE chat_id = ?", (chat_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else DEFAULT_THRESHOLD  # Default to 100 if not set
+
+# ✅ Set Drop Time in DB
+def set_drop_time(chat_id, threshold):
+    """Updates or inserts the Pokémon spawn threshold for a specific chat."""
+    conn, cursor = get_db_connection()
+    cursor.execute("""
+        INSERT INTO drop_time (chat_id, threshold)
+        VALUES (?, ?)
+        ON CONFLICT(chat_id) DO UPDATE SET threshold = excluded.threshold;
+    """, (chat_id, threshold))
+    conn.commit()
+    conn.close()
